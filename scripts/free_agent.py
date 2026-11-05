@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -73,7 +74,7 @@ def apply_proposal(proposal: dict, root: Path = ROOT) -> list[str]:
     for path, data in checked:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(data, encoding='utf-8')
-    return [str(p.relative_to(root)) for p, _ in checked]
+    return [p.relative_to(root).as_posix() for p, _ in checked]
 
 
 def build_context(root: Path, task: dict) -> str:
@@ -116,19 +117,63 @@ def generate(prompt: str, api_key: str, model: str = DEFAULT_MODEL) -> dict:
         headers={'Content-Type': 'application/json', 'x-goog-api-key': api_key},
         method='POST',
     )
-    try:
-        with urlopen(req, timeout=90) as response:
-            data = json.load(response)
-        response_text = ''.join(p.get('text', '') for p in data['candidates'][0]['content']['parts'])
-        return json.loads(response_text)
-    except HTTPError as exc:
-        # Error body can contain external service details; do not print the API key.
-        raise RuntimeError('Gemini API HTTP error ' + str(exc.code) +
-                           ' (verify key, free model availability, or quota)') from exc
-    except URLError as exc:
-        raise RuntimeError('Gemini API network error') from exc
-    except (KeyError, IndexError, json.JSONDecodeError) as exc:
-        raise RuntimeError('Gemini returned an invalid structured response') from exc
+    max_attempts = 4
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with urlopen(req, timeout=90) as response:
+                data = json.load(response)
+            response_text = ''.join(
+                part.get('text', '')
+                for part in data['candidates'][0]['content']['parts']
+            )
+            return json.loads(response_text)
+        except HTTPError as exc:
+            if exc.code in {500, 502, 503, 504} and attempt < max_attempts:
+                delay = 8 * (2 ** (attempt - 1))
+                print(
+                    f'Gemini HTTP {exc.code}; retrying in {delay}s '
+                    f'(attempt {attempt}/{max_attempts})',
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                continue
+            if exc.code in {500, 502, 503, 504}:
+                raise RuntimeError(
+                    f'Gemini service unavailable (HTTP {exc.code}) after '
+                    f'{max_attempts} attempts. Run the workflow again later.'
+                ) from exc
+            if exc.code == 429:
+                raise RuntimeError(
+                    'Gemini rate/quota limit (HTTP 429). Check the free-tier '
+                    'usage and limits in Google AI Studio. No changes published.'
+                ) from exc
+            if exc.code in {401, 403}:
+                raise RuntimeError(
+                    f'Gemini access denied (HTTP {exc.code}). Verify the '
+                    'GEMINI_API_KEY secret and account/model access.'
+                ) from exc
+            if exc.code == 404:
+                raise RuntimeError(
+                    'Gemini model unavailable (HTTP 404). Verify GEMINI_MODEL '
+                    'and the models enabled for your account.'
+                ) from exc
+            raise RuntimeError(f'Gemini API HTTP error {exc.code}') from exc
+        except (URLError, TimeoutError) as exc:
+            if attempt < max_attempts:
+                delay = 8 * (2 ** (attempt - 1))
+                print(
+                    f'Gemini network timeout/error; retrying in {delay}s '
+                    f'(attempt {attempt}/{max_attempts})',
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                continue
+            raise RuntimeError(
+                'Gemini connection failed after multiple attempts. '
+                'Try the workflow again later.'
+            ) from exc
+        except (KeyError, IndexError, json.JSONDecodeError) as exc:
+            raise RuntimeError('Gemini returned an invalid structured response') from exc
 
 
 def main() -> None:
