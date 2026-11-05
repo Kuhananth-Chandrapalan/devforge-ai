@@ -1,4 +1,4 @@
-name: Daily Codex Development
+name: Daily Free AI Development
 
 on:
   schedule:
@@ -13,7 +13,7 @@ concurrency:
 jobs:
   develop:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: read
@@ -44,25 +44,21 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Select an approved backlog task
+      - name: Select next task
         if: steps.pending.outputs.skip == 'false'
         id: task
         run: python scripts/select_task.py
 
-      - name: Run Codex inside the workspace
+      - name: Generate bounded feature using Gemini free tier
         if: steps.task.outputs.has_task == 'true'
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          permission-profile: ':workspace'
-          safety-strategy: drop-sudo
-          prompt-file: '.generated/prompt.txt'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.8-flash
+        run: python -m scripts.free_agent
 
       - name: Validate changed file boundaries
         if: steps.task.outputs.has_task == 'true'
-        run: |
-          rm -rf .generated
-          python scripts/guard_changes.py
+        run: python scripts/guard_changes.py
 
       - name: Run tests and Python syntax checks
         if: steps.task.outputs.has_task == 'true'
@@ -70,7 +66,7 @@ jobs:
           python -m unittest discover -s tests -v
           python -m compileall -q lab tests scripts
 
-      - name: Package reviewed-scope patch
+      - name: Package reviewable patch
         if: steps.task.outputs.has_task == 'true'
         env:
           TASK_ID: ${{ steps.task.outputs.task_id }}
@@ -114,28 +110,30 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: proposed-change
-          path: agent-output/
+          path: ${{ runner.temp }}/agent-output/
 
       - name: Apply and validate patch
         run: |
           set -euo pipefail
-          test -s agent-output/agent.patch
-          git apply --check agent-output/agent.patch
-          git apply agent-output/agent.patch
+          test -s "${RUNNER_TEMP}/agent-output/agent.patch"
+          git apply --check "${RUNNER_TEMP}/agent-output/agent.patch"
+          git apply "${RUNNER_TEMP}/agent-output/agent.patch"
           python scripts/guard_changes.py
+          python -m unittest discover -s tests -v
+          python -m compileall -q lab tests scripts
 
       - name: Open pull request without auto-merge
         env:
-          GH_TOKEN: ${{ secrets.DEVFORGE_GH_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          task_id=$(cat agent-output/task_id)
+          task_id=$(cat "${RUNNER_TEMP}/agent-output/task_id")
           echo "$task_id" | grep -Eq '^[a-z][a-z0-9-]{1,79}$'
           python scripts/mark_complete.py "$task_id"
           task_title=$(python -c 'import json,sys;print(next(x["title"] for x in json.load(open("tasks/backlog.json")) if x["id"]==sys.argv[1]))' "$task_id")
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           branch="automation/${task_id}-${RUN_ID}"
           git switch -c "$branch"
           git add -- lab tests docs tasks/completed.json
@@ -146,4 +144,4 @@ jobs:
             --base main \
             --head "$branch" \
             --title "feat: ${task_title}" \
-            --body "Automated implementation of backlog task \`${task_id}\`. Codex proposed changes; isolated generation checks passed. Inspect the diff and CI before manually merging. No auto-merge is enabled."
+            --body "AI-generated implementation of backlog task \`${task_id}\`. Gemini free-tier inference and isolated validation passed. Review changes manually. Do not merge before checking CI."

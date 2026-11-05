@@ -12,7 +12,7 @@ print(accuracy(actual, predicted))  # 0.75
 print(confusion_counts(actual, predicted))
 ```
 
-Later milestones add precision/recall/F1, multiclass reporting, and a JSON CLI.
+The daily free-tier AI editor is designed to propose the following milestones: precision/recall/F1, multiclass reporting, and a JSON CLI. Every change requires human PR review.
 
 Run checks with:
 
