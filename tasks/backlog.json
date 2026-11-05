@@ -1,0 +1,32 @@
+[
+  {
+    "id": "binary-precision-recall-f1",
+    "title": "Implement binary classification precision, recall and F1",
+    "instructions": "Add a public function binary_classification_metrics(y_true, y_pred, positive_label=1) returning a dictionary with precision, recall, f1, tp, fp, fn and tn. The metric must work for arbitrary hashable labels. When a denominator is zero, return 0.0 for that rate. Reuse existing validation. Export the function through lab/__init__.py and document usage in docs/.",
+    "acceptance": [
+      "Tests cover perfect prediction, false positives, false negatives and zero denominators",
+      "Input length mismatch and empty inputs are rejected",
+      "All existing tests continue to pass"
+    ]
+  },
+  {
+    "id": "macro-f1-multiclass",
+    "title": "Implement multiclass macro-F1 and per-class metrics",
+    "instructions": "Implement per_class_metrics(y_true, y_pred), yielding precision, recall, f1 and support for every label found in the inputs, and macro_f1(y_true, y_pred) returning an unweighted average over labels. Use stable predictable label ordering based on first occurrence, not sorting so heterogeneous labels work. Export functions through lab/__init__.py and add docs.",
+    "acceptance": [
+      "Tests cover three-class examples and missing predicted classes",
+      "Works for heterogeneous hashable labels without sorting",
+      "Empty and mismatched-length inputs are rejected"
+    ]
+  },
+  {
+    "id": "model-metrics-json-cli",
+    "title": "Create a JSON CLI for model metric evaluation",
+    "instructions": "Add lab/cli.py runnable with python -m lab.cli to accept an input JSON file with y_true and y_pred arrays, calculate accuracy and report available metrics, then output compact JSON to stdout. Return a nonzero exit status and a helpful stderr message for invalid files or data. Document usage. Do not add network access or dependencies.",
+    "acceptance": [
+      "CLI supports a sample JSON file and emits parseable JSON",
+      "Invalid file, malformed JSON and mismatched arrays return nonzero exit codes",
+      "CLI has tests using subprocess or direct main invocation"
+    ]
+  }
+]

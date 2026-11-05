@@ -1,0 +1,9 @@
+[project]
+name = "devforge-ai-pilot"
+version = "0.1.0"
+description = "A test-driven, agent-maintained Python metrics lab with human-reviewed PRs"
+requires-python = ">=3.11"
+license = "MIT"
+
+[tool.setuptools]
+packages = ["lab"]

@@ -1,0 +1,149 @@
+name: Daily Codex Development
+
+on:
+  schedule:
+    - cron: '17 8 * * *'
+      timezone: 'Asia/Colombo'
+  workflow_dispatch:
+
+concurrency:
+  group: devforge-daily
+  cancel-in-progress: false
+
+jobs:
+  develop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      has_task: ${{ steps.task.outputs.has_task }}
+    steps:
+      - name: Check out trusted default branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check for an existing automation PR
+        id: pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          count=$(gh pr list --state open --json headRefName \
+            --jq '[.[] | select(.headRefName | startswith("automation/"))] | length')
+          if [ "$count" -gt 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "An automation PR is awaiting human review; skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Select an approved backlog task
+        if: steps.pending.outputs.skip == 'false'
+        id: task
+        run: python scripts/select_task.py
+
+      - name: Run Codex inside the workspace
+        if: steps.task.outputs.has_task == 'true'
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':workspace'
+          safety-strategy: drop-sudo
+          prompt-file: '.generated/prompt.txt'
+
+      - name: Validate changed file boundaries
+        if: steps.task.outputs.has_task == 'true'
+        run: |
+          rm -rf .generated
+          python scripts/guard_changes.py
+
+      - name: Run tests and Python syntax checks
+        if: steps.task.outputs.has_task == 'true'
+        run: |
+          python -m unittest discover -s tests -v
+          python -m compileall -q lab tests scripts
+
+      - name: Package reviewed-scope patch
+        if: steps.task.outputs.has_task == 'true'
+        env:
+          TASK_ID: ${{ steps.task.outputs.task_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p agent-output
+          git add -N -- lab tests docs
+          git diff --binary -- lab tests docs > agent-output/agent.patch
+          test -s agent-output/agent.patch
+          printf '%s\n' "$TASK_ID" > agent-output/task_id
+
+      - name: Store patch for isolated publisher
+        if: steps.task.outputs.has_task == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: proposed-change
+          path: agent-output/
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: develop
+    if: needs.develop.outputs.has_task == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out trusted default branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Retrieve proposed patch
+        uses: actions/download-artifact@v4
+        with:
+          name: proposed-change
+          path: agent-output/
+
+      - name: Apply and validate patch
+        run: |
+          set -euo pipefail
+          test -s agent-output/agent.patch
+          git apply --check agent-output/agent.patch
+          git apply agent-output/agent.patch
+          python scripts/guard_changes.py
+
+      - name: Open pull request without auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.DEVFORGE_GH_TOKEN || github.token }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          task_id=$(cat agent-output/task_id)
+          echo "$task_id" | grep -Eq '^[a-z][a-z0-9-]{1,79}$'
+          python scripts/mark_complete.py "$task_id"
+          task_title=$(python -c 'import json,sys;print(next(x["title"] for x in json.load(open("tasks/backlog.json")) if x["id"]==sys.argv[1]))' "$task_id")
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="automation/${task_id}-${RUN_ID}"
+          git switch -c "$branch"
+          git add -- lab tests docs tasks/completed.json
+          git commit -m "feat: ${task_title}"
+          gh auth setup-git
+          git push --set-upstream origin "$branch"
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "feat: ${task_title}" \
+            --body "Automated implementation of backlog task \`${task_id}\`. Codex proposed changes; isolated generation checks passed. Inspect the diff and CI before manually merging. No auto-merge is enabled."
