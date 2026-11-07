@@ -1,3 +1,4 @@
 [
-  "binary-precision-recall-f1"
+  "binary-precision-recall-f1",
+  "macro-f1-multiclass"
 ]

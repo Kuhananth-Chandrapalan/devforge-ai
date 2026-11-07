@@ -2,7 +2,7 @@
 
 from collections import Counter
 from collections.abc import Hashable, Iterable
-from typing import Union
+from typing import Any, Union
 
 
 def _validate(y_true: Iterable[Hashable], y_pred: Iterable[Hashable]) -> tuple[list[Hashable], list[Hashable]]:
@@ -70,3 +70,54 @@ def binary_classification_metrics(
         "fn": fn,
         "tn": tn,
     }
+
+
+def per_class_metrics(y_true: Iterable[Hashable], y_pred: Iterable[Hashable]) -> dict[Hashable, dict[str, float]]:
+    """Compute precision, recall, f1, and support for every label found in inputs.
+
+    Labels are ordered by their first occurrence in y_true or y_pred without sorting.
+    """
+    true, pred = _validate(y_true, y_pred)
+    labels = []
+    seen = set()
+    for label in true + pred:
+        if label not in seen:
+            seen.add(label)
+            labels.append(label)
+
+    results = {}
+    for label in labels:
+        tp = 0
+        fp = 0
+        fn = 0
+        support = 0
+        for t, p in zip(true, pred):
+            if t == label:
+                support += 1
+            if t == label and p == label:
+                tp += 1
+            elif t != label and p == label:
+                fp += 1
+            elif t == label and p != label:
+                fn += 1
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+
+        results[label] = {
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "support": support,
+        }
+
+    return results
+
+
+def macro_f1(y_true: Iterable[Hashable], y_pred: Iterable[Hashable]) -> float:
+    """Compute unweighted average F1 score across all labels found in inputs."""
+    class_metrics = per_class_metrics(y_true, y_pred)
+    if not class_metrics:
+        return 0.0
+    return sum(metrics["f1"] for metrics in class_metrics.values()) / len(class_metrics)
